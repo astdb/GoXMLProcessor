@@ -5,9 +5,11 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 )
 
 func main() {
@@ -22,77 +24,234 @@ func main() {
 	imageAPILocation := os.Args[1]
 	outputFolderLocation := os.Args[2]
 	fmt.Printf("Accessing image API at %s\n", imageAPILocation)
-	fmt.Printf("Output files at <%s>\n", outputFolderLocation)
+	fmt.Printf("Output files will be written to <%s>\n", outputFolderLocation)
 
-	// get data from API location
+	// get XML data from API location
 	apiDataResp, err := http.Get(imageAPILocation)
-
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "API fetch: %v\n", err)
+		fmt.Fprintf(os.Stderr, "API fetch error: %v\n", err)
 		os.Exit(1)
 	}
 
-	apiDataRespBody, err := ioutil.ReadAll(apiDataResp.Body)
-	apiDataResp.Body.Close()
+	// token literals predefined for comparison
+	ID := "id"
+	FILENAME := "filename"
+	WORK := "work"
+	MAKE := "make"
+	MODEL := "model"
 
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "API fetch reading %s: %v\n", imageAPILocation, err)
-		os.Exit(1)
+	// read XML data body
+	dec := xml.NewDecoder(apiDataResp.Body)
+
+	var stack []string // we'll use a stack of strings to pop in/off start/end elements as we read through the XML data body's tokens
+	var works []*Work  // collection of all works detected
+	var makes []*Make  // collection of all makes detected
+	// var models []*Model	// collection of all models detected
+
+	// per detected token, until EOF
+	for {
+		// get token
+		token, err := dec.Token()
+
+		// handle any errors
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading XML data body token: %v\n", err)
+			os.Exit(1)
+		}
+
+		var newWork *Work
+
+		// selective action based on token type
+		switch token := token.(type) {
+		case xml.StartElement:
+			// XML start element: push on stack
+			stack = append(stack, token.Name.Local)
+
+			if len(stack) > 0 && stack[len(stack)-1] == WORK {
+				// start of a new <work> in XML data: create a new Work instance and pop in to the list of all works
+				newWork = createWork()
+				works = append(works, newWork)
+			}
+		case xml.EndElement:
+			// XML end element: pop off stack
+			elementPopped := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+
+			if elementPopped == WORK {
+				// end of a <work> element (</work>)
+				newWork = nil
+			}
+		case xml.CharData:
+			// XML data
+			if len(stack) > 0 && stack[len(stack)-1] == ID {
+				if len(works) > 0 {
+					works[len(works)-1].ID, err = strconv.Atoi(strings.TrimSpace(string(token)))
+
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error converting Work ID: %v\n", err)
+						os.Exit(1)
+					}
+				}
+			}
+
+			if len(stack) > 0 && stack[len(stack)-1] == FILENAME {
+				// fmt.Printf("%s\n", token)
+				if len(works) > 0 {
+					works[len(works)-1].FileName = strings.TrimSpace(string(token))
+				}
+			}
+
+			if len(stack) > 0 && stack[len(stack)-1] == MAKE {
+				// retrieve make if already recorded, create if new
+				thisToken := strings.TrimSpace(string(token))
+				var thisMake *Make
+
+				if thisToken == "" {
+					thisToken = "(Generic make)"
+				}
+
+				makeFound := false
+				for _, make := range makes {
+					if make != nil && make.Name == thisToken {
+						thisMake = make
+						makeFound = true
+						break
+					}
+				}
+
+				if makeFound {
+					works[len(works)-1].WMake = thisMake
+				} else {
+					thisMake = createMake(thisToken)
+					makes = append(makes, thisMake)
+					works[len(works)-1].WMake = thisMake
+				}
+
+				// if len(works) > 0 {
+				// 	works[len(works)-1].WMake = strings.TrimSpace(string(token))
+				// }
+			}
+
+			if len(stack) > 0 && stack[len(stack)-1] == MODEL {
+				if len(works) > 0 {
+					works[len(works)-1].WModel = strings.TrimSpace(string(token))
+				}
+			}
+		}
 	}
 
-	// fmt.Printf("%s", apiDataRespBody)
-
-	// unmarshall xml body
-	var wl WorkList
-	err = xml.Unmarshal(apiDataRespBody, &wl)
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unmarshalling: %v\n", err)
-		os.Exit(1)
-	} else {
-        fmt.Printf("XML data unmarshalled successfully.\n")
-    }
-
-	for _, thisWork := range wl.WorkList {
-        // fmt.Printf("URLs: %v\n", thisWork.Url)
-        fmt.Printf("URLs: %v\n", thisWork.EXIFData)
-    }
+	for _, m := range makes {
+		printMakes(m)
+	}
+	fmt.Println()
+	for _, w := range works {
+		printWorks(w)
+	}
 }
 
-// list of works to be read in from API
-type WorkList struct {
-	WorkList []Work `xml:"work"`
-}
+//----------------- Types -------------------------------
 
+// type struct representing a photographic work
 type Work struct {
-	XMLName  xml.Name `xml:"work"`
-	Url     string `xml:"small,attr"`
-    // Where string `xml:"where,attr"`
-	EXIFData []string `xml:"exif"`
-
-	/* Name    string   `xml:"FullName"`
-	   Phone   string
-	   Email   []Email
-	   Groups  []string `xml:"Group>Value"`
-	   Address */
+	ID       int
+	FileName string
+	WMake    *Make
+	WModel   string
 }
 
-// ------------------- Internal Datatypes -------------------------------
-// a photographic work
-type WorkInternal struct {
-	cameraMake   MakeInternal  // make of the camera which produced this photo
-	cameraModel  ModelInternal // model of the camera which produced this photo
-	thumbnailURL string        // thumbnail location for this photo
+// type struct representing a camera make
+type Make struct {
+	ID     int
+	Name   string
+	Models []Model
+	Page   string
 }
 
-// a camera make
-type MakeInternal struct {
-	Name   string          // name of this camera make
-	Models []ModelInternal // list of models of this make
+// type struct representing a camera model
+type Model struct {
+	ID   int
+	Make Make
+	Name string
+	Page string
 }
 
-// a camera model
-type ModelInternal struct {
-	modelName string       // name of this camera model
-	modelMake MakeInternal // make of this camera model
+//----------------- Type Generator -------------------------------
+
+func createMake(name string) *Make {
+	var m Make
+	m.Name = name
+
+	return &m
 }
+
+func createModel(name string, make Make) *Model {
+	var m Model
+	m.Name = name
+	m.Make = make
+
+	return &m
+}
+
+func createWork() *Work {
+	var w Work
+	w.ID = -1
+	w.FileName = ""
+	w.WMake = nil
+	w.WModel = ""
+
+	return &w
+}
+
+//----------------- Type Methods -------------------------------
+
+func (m *Make) GetName() string {
+	return m.Name
+}
+
+//----------------- Utilities -------------------------------
+
+func printMakes(m *Make) {
+	if m == nil {
+		fmt.Println("<Invalid Make object>")
+		return
+	}
+
+	fmt.Println(m.Name)
+	return
+}
+
+func printWorks(w *Work) {
+	if w == nil {
+		fmt.Println("<Invalid work object>")
+		return
+	}
+
+	wMakeName := ""
+	if w.WMake == nil {
+		wMakeName = "<Generic/undefined>"
+	} else {
+		wMakeName = w.WMake.Name
+	}
+
+	/// fmt.Println("[" + strconv.Itoa(w.ID) + "| " + w.WModel + "]")
+	fmt.Println("[" + strconv.Itoa(w.ID) + "| " + wMakeName + "| " + w.WModel + "]")
+	return
+}
+
+// containsAll reports whether x contains the elements of y, in order.
+func containsAll(x, y []string) bool {
+	for len(y) <= len(x) {
+		if len(y) == 0 {
+			return true
+		}
+		if x[0] == y[0] {
+			y = y[1:]
+		}
+		x = x[1:]
+	}
+	return false
+}
+
+//!-
