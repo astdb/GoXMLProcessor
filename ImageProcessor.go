@@ -40,6 +40,9 @@ func main() {
 	WORK := "work"
 	MODEL := "model"
 	MAKE := "make"
+	URISMALL := "small"
+	URIMEDIUM := "medium"
+	URILARGE := "large"
 
 	// read XML data body
 	dec := xml.NewDecoder(apiDataResp.Body)
@@ -52,6 +55,11 @@ func main() {
 	newModelDetected := false // flag indicating if a new model was detected in this work (if so to be added to the make of this work)
 	// var newModel string
 	newModel := "" // name of new model detected (if indicated by newModelDetected flag above)
+
+	// URI data type flags
+	thumbnailURI := false
+	mediumURI := false
+	largeURI := false
 
 	// iterate through the full XML data body per detected token, until EOF
 	for {
@@ -81,6 +89,24 @@ func main() {
 				newWork = createWork()
 				works = append(works, newWork)
 			}
+
+			if len(stack) > 0 && stack[len(stack)-1] == "url" {
+				for _, val := range token.Attr {
+					// fmt.Printf("Name: %v , Value: %s \n", key, val)
+					if val.Value == URISMALL {
+						thumbnailURI = true
+					}
+
+					if val.Value == URIMEDIUM {
+						mediumURI = true
+					}
+
+					if val.Value == URILARGE {
+						largeURI = true
+					}
+				}
+			}
+
 		case xml.EndElement:
 			// XML end element: pop off stack
 			elementPopped := stack[len(stack)-1]
@@ -160,7 +186,6 @@ func main() {
 				// camera model detected for this work?
 				if newModelDetected == true {
 					var thisModel *Model
-					var thisMake *Make
 					var thisWork *Work
 
 					if len(works) > 0 {
@@ -170,7 +195,7 @@ func main() {
 						os.Exit(1)
 					}
 
-					// if by any chance the model name is actually empty e.g <model></model> (:@)
+					// if the model name is empty
 					if newModel == "" {
 						newModel = "(Generic model)"
 					}
@@ -179,9 +204,8 @@ func main() {
 					modelFound := false
 					if thisWork.WMake != nil {
 						for _, model := range thisWork.WMake.Models {
-							if model != nil && model.Name == thisToken {
+							if model != nil && model.Name == newModel {
 								thisModel = model
-								thisMake = thisWork.WMake
 								modelFound = true
 							}
 						}
@@ -197,8 +221,8 @@ func main() {
 							thisWork.WMake.Models = append(thisWork.WMake.Models, thisModel)
 						}
 
-						// thisModel = nil
-
+						thisModel = nil
+						newModel = ""
 						// works[len(works)-1].WMake = thisMake
 					}
 
@@ -212,76 +236,55 @@ func main() {
 				thisToken := strings.TrimSpace(string(token))
 				newModel = thisToken
 				newModelDetected = true
+			}
 
-				// // if newWork != nil {
-				// var thisModel *Model
-				// var thisMake *Make
+			if thumbnailURI == true {
+				// fmt.Println(strings.TrimSpace(string(token)))
+				if len(works) > 0 {
+					works[len(works)-1].URISmall = strings.TrimSpace(string(token))
+				}
 
-				// var thisWork *Work
+				thumbnailURI = false
+			}
 
-				// if len(works) > 0 {
-				// 	thisWork = works[len(works)-1]
-				// } else {
-				// 	fmt.Fprintf(os.Stderr, "No works recorded so far.")
-				// 	os.Exit(1)
-				// }
+			if mediumURI == true {
+				if len(works) > 0 {
+					works[len(works)-1].URIMedium = strings.TrimSpace(string(token))
+				}
 
-				// if thisToken == "" {
-				// 	thisToken = "(Generic model)"
-				// }
+				mediumURI = false
+			}
 
-				// modelFound := false
-				// if thisWork.WMake != nil {
-				// 	for _, model := range thisWork.WMake.Models {
-				// 		if model != nil && thisWork.WMake != nil && thisModel.Name == thisToken {
-				// 			thisModel = model
-				// 			thisMake = thisWork.WMake
-				// 			modelFound = true
-				// 		}
-				// 	}
-				// }
+			if largeURI == true {
+				if len(works) > 0 {
+					works[len(works)-1].URILarge = strings.TrimSpace(string(token))
+				}
 
-				// if modelFound {
-				// 	thisWork.WModel = thisModel
-				// } else {
-				// 	thisModel = createModel(thisToken, thisMake)
-
-				// 	if thisWork.WMake != nil {
-				// 		// thisWork.WMake.Models = append(newWork.WMake.Models, thisModel)
-				// 		fmt.Println("Adding " + thisModel.Name)
-				// 		thisWork.WMake.Models = append(thisWork.WMake.Models, thisModel)
-				// 		fmt.Println(thisWork.WMake.Models)
-				// 	}
-
-				// 	// works[len(works)-1].WMake = thisMake
-				// }
-				// // } else {
-				// // fmt.Fprintf(os.Stderr, "Model detected with no active work - possibly malformed XML input")
-				// // os.Exit(1)
-				// // }
+				largeURI = false
 			}
 		}
-
-		// fmt.Println()
 	}
 
-	for _, m := range makes {
-		printMakes(m)
-	}
-	// fmt.Println()
-	// for _, w := range works {
-	// 	printWorks(w)
+	// for _, m := range makes {
+	// 	printMake(m)
 	// }
+	// fmt.Println()
+	for _, w := range works {
+		printWork(w)
+	}
 }
 
 //----------------- Types -------------------------------
 
 // type struct representing a photographic work
 type Work struct {
-	ID       int
-	FileName string
-	WMake    *Make
-	WModel   *Model
+	ID        int
+	FileName  string
+	WMake     *Make
+	WModel    *Model
+	URISmall  string
+	URIMedium string
+	URILarge  string
 }
 
 // type struct representing a camera make
@@ -335,7 +338,7 @@ func (m *Make) GetName() string {
 
 //----------------- Utilities -------------------------------
 
-func printMakes(m *Make) {
+func printMake(m *Make) {
 	if m == nil {
 		fmt.Println("<Invalid Make object>")
 		return
@@ -350,7 +353,7 @@ func printMakes(m *Make) {
 	return
 }
 
-func printWorks(w *Work) {
+func printWork(w *Work) {
 	if w == nil {
 		fmt.Println("<Invalid work object>")
 		return
@@ -372,6 +375,9 @@ func printWorks(w *Work) {
 
 	/// fmt.Println("[" + strconv.Itoa(w.ID) + "| " + w.WModel + "]")
 	fmt.Println("[" + strconv.Itoa(w.ID) + "| " + wMakeName + "| " + wModelName + "]")
+	fmt.Println("\t Thumbnail: " + w.URISmall)
+	fmt.Println("\t Medium: " + w.URIMedium)
+	fmt.Println("\t Large: " + w.URILarge)
 	return
 }
 
