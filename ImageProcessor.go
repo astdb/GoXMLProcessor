@@ -16,6 +16,7 @@ func main() {
 	fmt.Println("Image processor starting...")
 	// fmt.Println(len(os.Args))
 
+	// expecting two command-line arguments at invocation - API location for reading image data from and output directory for writing static site files
 	if len(os.Args) <= 2 {
 		fmt.Println("Error: please enter the image API URL and an output directory location as command-line arguments (e.g. >go run ImageProcessor http://localhost/test/api/v1/works.xml code/html/output)")
 		return
@@ -33,24 +34,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	// token literals predefined for comparison
+	// predefine the token literal values we're interested in for ease of comparison when processing the XML data body
 	ID := "id"
 	FILENAME := "filename"
 	WORK := "work"
-	MAKE := "make"
 	MODEL := "model"
+	MAKE := "make"
 
 	// read XML data body
 	dec := xml.NewDecoder(apiDataResp.Body)
 
-	var stack []string // we'll use a stack of strings to pop in/off start/end elements as we read through the XML data body's tokens
+	var stack []string // we'll use a string slice as a stack datastructure to pop on/off start/end elements as we read through the XML data body's tokens
 	var works []*Work  // collection of all works detected
 	var makes []*Make  // collection of all makes detected
-	// var models []*Model	// collection of all models detected
 
-	// per detected token, until EOF
+	var newWork *Work         // placeholder for the work cirrently being iterated through
+	newModelDetected := false // flag indicating if a new model was detected in this work (if so to be added to the make of this work)
+	// var newModel string
+	newModel := "" // name of new model detected (if indicated by newModelDetected flag above)
+
+	// iterate through the full XML data body per detected token, until EOF
 	for {
-		// get token
+		// get next XML token
 		token, err := dec.Token()
 
 		// handle any errors
@@ -61,16 +66,18 @@ func main() {
 			os.Exit(1)
 		}
 
-		var newWork *Work
+		// fmt.Print(stack)
 
-		// selective action based on token type
+		// switch statement to take selective action based on the current token
 		switch token := token.(type) {
 		case xml.StartElement:
-			// XML start element: push on stack
+			// XML start element: push on stack and initialize new work object
 			stack = append(stack, token.Name.Local)
+			// fmt.Print(" (pushing " + token.Name.Local + ")")
 
 			if len(stack) > 0 && stack[len(stack)-1] == WORK {
 				// start of a new <work> in XML data: create a new Work instance and pop in to the list of all works
+				// fmt.Printf("------------------------starting new work object------------------------")
 				newWork = createWork()
 				works = append(works, newWork)
 			}
@@ -78,13 +85,19 @@ func main() {
 			// XML end element: pop off stack
 			elementPopped := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
+			// fmt.Println(" (popping " + token.Name.Local + ")")
 
 			if elementPopped == WORK {
 				// end of a <work> element (</work>)
+				// fmt.Printf("------------------------ending work object------------------------")
 				newWork = nil
+				newModelDetected = false
+				newModel = ""
 			}
 		case xml.CharData:
-			// XML data
+			// XML data - populate the current work object based on XML data token (e.g. ID, model, make etc.)
+
+			//Work ID
 			if len(stack) > 0 && stack[len(stack)-1] == ID {
 				if len(works) > 0 {
 					works[len(works)-1].ID, err = strconv.Atoi(strings.TrimSpace(string(token)))
@@ -96,6 +109,7 @@ func main() {
 				}
 			}
 
+			// Work filename
 			if len(stack) > 0 && stack[len(stack)-1] == FILENAME {
 				// fmt.Printf("%s\n", token)
 				if len(works) > 0 {
@@ -103,15 +117,19 @@ func main() {
 				}
 			}
 
+			// Work camera make
 			if len(stack) > 0 && stack[len(stack)-1] == MAKE {
-				// retrieve make if already recorded, create if new
+				// make detected: retrieve make if already recorded, create if new
 				thisToken := strings.TrimSpace(string(token))
+
+				// if newWork != nil {
 				var thisMake *Make
 
 				if thisToken == "" {
 					thisToken = "(Generic make)"
 				}
 
+				// check if this make is recorded in the global makes list
 				makeFound := false
 				for _, make := range makes {
 					if make != nil && make.Name == thisToken {
@@ -122,33 +140,138 @@ func main() {
 				}
 
 				if makeFound {
+					// known make, populate work's make attribute with the make from the global list
 					works[len(works)-1].WMake = thisMake
 				} else {
+					// new make: create and add to global makes list, and populate this work's make attribute with it
 					thisMake = createMake(thisToken)
 					makes = append(makes, thisMake)
 					works[len(works)-1].WMake = thisMake
 				}
+				// } else {
+				// fmt.Fprintf(os.Stderr, "Make detected with no active Work element - possibly malformed XML input")
+				// os.Exit(1)
+				// }
 
 				// if len(works) > 0 {
 				// 	works[len(works)-1].WMake = strings.TrimSpace(string(token))
 				// }
+
+				// camera model detected for this work?
+				if newModelDetected == true {
+					var thisModel *Model
+					var thisMake *Make
+					var thisWork *Work
+
+					if len(works) > 0 {
+						thisWork = works[len(works)-1]
+					} else {
+						fmt.Fprintf(os.Stderr, "No works recorded, but already processing a camera model - malformed XML?")
+						os.Exit(1)
+					}
+
+					// if by any chance the model name is actually empty e.g <model></model> (:@)
+					if newModel == "" {
+						newModel = "(Generic model)"
+					}
+
+					// check if this model is recorded in this make's model list
+					modelFound := false
+					if thisWork.WMake != nil {
+						for _, model := range thisWork.WMake.Models {
+							if model != nil && model.Name == thisToken {
+								thisModel = model
+								thisMake = thisWork.WMake
+								modelFound = true
+							}
+						}
+					}
+
+					if modelFound {
+						thisWork.WModel = thisModel
+					} else {
+						thisModel = createModel(newModel, thisMake)
+
+						if thisWork.WMake != nil {
+							// thisWork.WMake.Models = append(newWork.WMake.Models, thisModel)
+							thisWork.WMake.Models = append(thisWork.WMake.Models, thisModel)
+						}
+
+						// thisModel = nil
+
+						// works[len(works)-1].WMake = thisMake
+					}
+
+					newModelDetected = false
+				}
 			}
 
 			if len(stack) > 0 && stack[len(stack)-1] == MODEL {
-				if len(works) > 0 {
-					works[len(works)-1].WModel = strings.TrimSpace(string(token))
-				}
+				// model detected: add this model to the make.[]model of this work (if not already recorded)
+				// fmt.Println("++++++++++Model detected++++++++++")
+				thisToken := strings.TrimSpace(string(token))
+				newModel = thisToken
+				newModelDetected = true
+
+				// // if newWork != nil {
+				// var thisModel *Model
+				// var thisMake *Make
+
+				// var thisWork *Work
+
+				// if len(works) > 0 {
+				// 	thisWork = works[len(works)-1]
+				// } else {
+				// 	fmt.Fprintf(os.Stderr, "No works recorded so far.")
+				// 	os.Exit(1)
+				// }
+
+				// if thisToken == "" {
+				// 	thisToken = "(Generic model)"
+				// }
+
+				// modelFound := false
+				// if thisWork.WMake != nil {
+				// 	for _, model := range thisWork.WMake.Models {
+				// 		if model != nil && thisWork.WMake != nil && thisModel.Name == thisToken {
+				// 			thisModel = model
+				// 			thisMake = thisWork.WMake
+				// 			modelFound = true
+				// 		}
+				// 	}
+				// }
+
+				// if modelFound {
+				// 	thisWork.WModel = thisModel
+				// } else {
+				// 	thisModel = createModel(thisToken, thisMake)
+
+				// 	if thisWork.WMake != nil {
+				// 		// thisWork.WMake.Models = append(newWork.WMake.Models, thisModel)
+				// 		fmt.Println("Adding " + thisModel.Name)
+				// 		thisWork.WMake.Models = append(thisWork.WMake.Models, thisModel)
+				// 		fmt.Println(thisWork.WMake.Models)
+				// 	}
+
+				// 	// works[len(works)-1].WMake = thisMake
+				// }
+				// // } else {
+				// // fmt.Fprintf(os.Stderr, "Model detected with no active work - possibly malformed XML input")
+				// // os.Exit(1)
+				// // }
 			}
 		}
+
+		// fmt.Println()
 	}
 
 	for _, m := range makes {
 		printMakes(m)
 	}
-	fmt.Println()
-	for _, w := range works {
-		printWorks(w)
-	}
+	// fmt.Println()
+	// for _, w := range works {
+	// 	printWorks(w)
+	// }
 }
 
 //----------------- Types -------------------------------
@@ -158,23 +281,23 @@ type Work struct {
 	ID       int
 	FileName string
 	WMake    *Make
-	WModel   string
+	WModel   *Model
 }
 
 // type struct representing a camera make
 type Make struct {
-	ID     int
-	Name   string
-	Models []Model
-	Page   string
+	ID      int
+	Name    string
+	Models  []*Model
+	PageURL string
 }
 
 // type struct representing a camera model
 type Model struct {
-	ID   int
-	Make Make
-	Name string
-	Page string
+	ID      int
+	MMake   *Make
+	Name    string
+	PageURL string
 }
 
 //----------------- Type Generator -------------------------------
@@ -186,10 +309,10 @@ func createMake(name string) *Make {
 	return &m
 }
 
-func createModel(name string, make Make) *Model {
+func createModel(name string, make *Make) *Model {
 	var m Model
 	m.Name = name
-	m.Make = make
+	m.MMake = make
 
 	return &m
 }
@@ -199,7 +322,7 @@ func createWork() *Work {
 	w.ID = -1
 	w.FileName = ""
 	w.WMake = nil
-	w.WModel = ""
+	w.WModel = nil
 
 	return &w
 }
@@ -218,7 +341,12 @@ func printMakes(m *Make) {
 		return
 	}
 
-	fmt.Println(m.Name)
+	// fmt.Printf("%s [%v]\n", m.Name, m.Models)
+	fmt.Println(m.Name + "(" + strconv.Itoa(len(m.Models)) + ")")
+	for _, model := range m.Models {
+		fmt.Println("\t" + model.Name)
+	}
+
 	return
 }
 
@@ -235,8 +363,15 @@ func printWorks(w *Work) {
 		wMakeName = w.WMake.Name
 	}
 
+	wModelName := ""
+	if w.WModel == nil {
+		wModelName = "<Generic/undefined>"
+	} else {
+		wModelName = w.WModel.Name
+	}
+
 	/// fmt.Println("[" + strconv.Itoa(w.ID) + "| " + w.WModel + "]")
-	fmt.Println("[" + strconv.Itoa(w.ID) + "| " + wMakeName + "| " + w.WModel + "]")
+	fmt.Println("[" + strconv.Itoa(w.ID) + "| " + wMakeName + "| " + wModelName + "]")
 	return
 }
 
