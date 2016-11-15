@@ -68,6 +68,7 @@ func main() {
 
 		// handle any errors
 		if err == io.EOF {
+			// reached end of data
 			break
 		} else if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading XML data body token: %v\n", err)
@@ -219,6 +220,7 @@ func main() {
 						if thisWork.WMake != nil {
 							// thisWork.WMake.Models = append(newWork.WMake.Models, thisModel)
 							thisWork.WMake.Models = append(thisWork.WMake.Models, thisModel)
+							thisWork.WModel = thisModel
 						}
 
 						thisModel = nil
@@ -269,9 +271,56 @@ func main() {
 	// 	printMake(m)
 	// }
 	// fmt.Println()
-	for _, w := range works {
-		printWork(w)
+	// for _, w := range works {
+	// 	printWork(w)
+	// }
+
+	// ------- Generate index.html -------------------
+
+	// check if the specified output directory exists - if not, create it
+	fileInPlace, e := fileExists("./" + outputFolderLocation)
+
+	if e != nil {
+		fmt.Fprintf(os.Stderr, "Error checking output directory placement: %v\n", e)
+		os.Exit(1)
 	}
+
+	if fileInPlace {
+		fmt.Println("./" + outputFolderLocation + " in place.")
+	} else {
+		fmt.Println("./" + outputFolderLocation + " not in place - creating...")
+		os.MkdirAll("./"+outputFolderLocation, 0755)
+	}
+
+	// open output file for writing
+	outFileName := "./" + outputFolderLocation + "/index.html"
+	f, err := os.Create(outFileName)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating output disk file: %v\n", err)
+		os.Exit(1)
+	}
+
+	defer f.Close()
+
+	makesSelect := ""
+
+	for _, mk := range makes {
+		
+	}
+
+	indexTitle := "Welcome to Photos!"
+	indexNavigation := `<select><option value="--">-- select a camera make</option>` + makesSelect + `</select>`
+	indexContent := "Just some images"
+
+	_, err = f.WriteString(`<!DOCTYPE html><html><head><title>Works Index</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>` + indexTitle + `</h1><nav>` + indexNavigation + `</nav></header>` + indexContent + `</body></html>`)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing output to disk file: %v\n", err)
+		os.Exit(1)
+	}
+
+	f.Sync()
 }
 
 //----------------- Types -------------------------------
@@ -379,6 +428,21 @@ func printWork(w *Work) {
 	fmt.Println("\t Medium: " + w.URIMedium)
 	fmt.Println("\t Large: " + w.URILarge)
 	return
+}
+
+// exists returns whether the given file or directory exists or not
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+
+	if err == nil {
+		return true, nil
+	}
+
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+
+	return true, err
 }
 
 // containsAll reports whether x contains the elements of y, in order.
