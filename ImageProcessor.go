@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -25,7 +26,7 @@ func main() {
 	imageAPILocation := os.Args[1]
 	outputFolderLocation := os.Args[2]
 	fmt.Printf("Accessing image API at %s\n", imageAPILocation)
-	fmt.Printf("Output files will be written to <%s>\n", outputFolderLocation)
+	fmt.Printf("Output files will be written to <./%s>\n", outputFolderLocation)
 
 	// get XML data from API location
 	apiDataResp, err := http.Get(imageAPILocation)
@@ -47,9 +48,10 @@ func main() {
 	// read XML data body
 	dec := xml.NewDecoder(apiDataResp.Body)
 
-	var stack []string // we'll use a string slice as a stack datastructure to pop on/off start/end elements as we read through the XML data body's tokens
-	var works []*Work  // collection of all works detected
-	var makes []*Make  // collection of all makes detected
+	var stack []string  // we'll use a string slice as a stack datastructure to pop on/off start/end elements as we read through the XML data body's tokens
+	var works []*Work   // collection of all works detected
+	var makes []*Make   // collection of all makes detected
+	var worksSM []*Work // Works sans makes - if a work is found without a make speceifed, it'll go on this list and have a separate page generated for it to be diplayed
 
 	var newWork *Work         // placeholder for the work cirrently being iterated through
 	newModelDetected := false // flag indicating if a new model was detected in this work (if so to be added to the make of this work)
@@ -86,7 +88,6 @@ func main() {
 
 			if len(stack) > 0 && stack[len(stack)-1] == WORK {
 				// start of a new <work> in XML data: create a new Work instance and pop in to the list of all works
-				// fmt.Printf("------------------------starting new work object------------------------")
 				newWork = createWork()
 				works = append(works, newWork)
 			}
@@ -116,10 +117,26 @@ func main() {
 
 			if elementPopped == WORK {
 				// end of a <work> element (</work>)
-				// fmt.Printf("------------------------ending work object------------------------")
+
+				// add this work to its make and model's works lists
+				thisWork := newWork
+				thisMake := newWork.WMake
+				thisModel := newWork.WModel
+
+				if thisMake == nil {
+					// record works without a make specified separately
+					worksSM = append(worksSM, thisWork)
+				}
+
+				if thisMake != nil && thisModel != nil {
+					thisMake.Works = append(thisMake.Works, thisWork)
+					thisModel.Works = append(thisModel.Works, thisWork)
+				}
+
 				newWork = nil
 				newModelDetected = false
 				newModel = ""
+				thisWork, thisMake, thisModel = nil, nil, nil
 			}
 		case xml.CharData:
 			// XML data - populate the current work object based on XML data token (e.g. ID, model, make etc.)
@@ -234,7 +251,6 @@ func main() {
 
 			if len(stack) > 0 && stack[len(stack)-1] == MODEL {
 				// model detected: add this model to the make.[]model of this work (if not already recorded)
-				// fmt.Println("++++++++++Model detected++++++++++")
 				thisToken := strings.TrimSpace(string(token))
 				newModel = thisToken
 				newModelDetected = true
@@ -266,17 +282,7 @@ func main() {
 			}
 		}
 	}
-
-	// for _, m := range makes {
-	// 	printMake(m)
-	// }
-	// fmt.Println()
-	// for _, w := range works {
-	// 	printWork(w)
-	// }
-
 	// ------- Generate index.html -------------------
-
 	// check if the specified output directory exists - if not, create it
 	fileInPlace, e := fileExists("./" + outputFolderLocation)
 
@@ -297,21 +303,42 @@ func main() {
 	f, err := os.Create(outFileName)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating output disk file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating index HTML file: %v\n", err)
 		os.Exit(1)
 	}
 
 	defer f.Close()
 
-	makesSelect := ""
+	// title pf index.html
+	indexTitle := "Welcome to Photos!"
 
+	// dropdown navigation to all camera makes
+	indexNavigation := `<select onchange="if (this.value) window.location.href=this.value"><option value="">-- select a camera make</option>`
 	for _, mk := range makes {
-		
+		if mk != nil {
+			indexNavigation = indexNavigation + `<option value="` + mk.PageURL + `.html">` + mk.Name + `</option>`
+		}
 	}
 
-	indexTitle := "Welcome to Photos!"
-	indexNavigation := `<select><option value="--">-- select a camera make</option>` + makesSelect + `</select>`
-	indexContent := "Just some images"
+	if len(worksSM) > 0 {
+		indexNavigation = indexNavigation + `<option value="nomake.html">(no make/generic)</option></select>`
+	} else {
+		indexNavigation = indexNavigation + `</select>`
+	}
+
+	// create thumbnails of first 10 works
+	indexContent := ""
+
+	imgCount := 0
+
+	for _, wk := range works {
+		indexContent = indexContent + `<img src=` + wk.URISmall + `> `
+
+		imgCount++
+		if imgCount >= 10 {
+			break
+		}
+	}
 
 	_, err = f.WriteString(`<!DOCTYPE html><html><head><title>Works Index</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>` + indexTitle + `</h1><nav>` + indexNavigation + `</nav></header>` + indexContent + `</body></html>`)
 
@@ -321,6 +348,134 @@ func main() {
 	}
 
 	f.Sync()
+
+	// ------------- Generate individual pages for each of the camera makes ------------------
+
+	for _, mk := range makes {
+		if mk != nil {
+			outFileName := "./" + outputFolderLocation + "/" + mk.PageURL + ".html"
+			f, err := os.Create(outFileName)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error creating camera make page: %v\n", err)
+				os.Exit(1)
+			}
+
+			defer f.Close()
+
+			// dropdown navigation to all camera models of this make
+			modelNavigation := `<select onchange="if (this.value) window.location.href=this.value"><option value="">-- select a camera model</option>`
+			for _, md := range mk.Models {
+				if md != nil {
+					modelNavigation = modelNavigation + `<option value="` + md.PageURL + `.html">` + md.Name + `</option>`
+				}
+			}
+
+			modelNavigation = modelNavigation + `</select>`
+
+			// create thumbnails of first 10 works by this make
+			makeContent := ""
+			imgCount := 0
+			// }
+
+			for _, wk := range mk.Works {
+				if wk != nil && wk.WMake != nil && wk.WMake.Name == mk.Name {
+					makeContent = makeContent + `<img src=` + wk.URISmall + `> `
+
+					imgCount++
+					if imgCount >= 10 {
+						break
+					}
+				}
+			}
+
+			_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + mk.Name + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a ` + mk.Name + `</h1><nav><a href="index.html">back to homepage</a> | ` + modelNavigation + `</nav></header>` + makeContent + `</body></html>`)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing output to make HTML file: %v\n", err)
+				os.Exit(1)
+			}
+
+			f.Sync()
+		}
+	}
+
+	// ------------- Generate separate page for works without a make ------------------
+	if len(worksSM) > 0 {
+		for _, wk := range worksSM {
+			if wk != nil {
+				outFileName := "./" + outputFolderLocation + "/nomake.html"
+				f, err := os.Create(outFileName)
+
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error creating generic works page: %v\n", err)
+					os.Exit(1)
+				}
+
+				defer f.Close()
+
+				// create thumbnails of first 10 works by this make
+				genericContent := ""
+
+				// imgCount := 0
+
+				if wk != nil {
+					genericContent = genericContent + `<img src=` + wk.URISmall + `> `
+
+					// imgCount++
+					// if imgCount >= 10 {
+					// 	break
+					// }
+				}
+
+				_, err = f.WriteString(`<!DOCTYPE html><html><head><title>Generic Photographic Works</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>Generic Photos</h1><nav><a href="index.html">back to homepage</a> </nav></header>` + genericContent + `</body></html>`)
+
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error writing output to generic make works file: %v\n", err)
+					os.Exit(1)
+				}
+
+				f.Sync()
+			}
+		}
+	}
+
+	// ------------- Generate individual pages for each of the camera models ------------------
+	for _, mk := range makes {
+		if mk != nil {
+			for _, md := range mk.Models {
+				if md != nil {
+					outFileName := "./" + outputFolderLocation + "/" + md.PageURL + ".html"
+					f, err := os.Create(outFileName)
+
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error creating camera model page: %v\n", err)
+						os.Exit(1)
+					}
+
+					defer f.Close()
+
+					// create thumbnails of first 10 works by this make
+					modelContent := ""
+
+					imgCount := 0
+
+					for _, wk := range md.Works {
+						if wk != nil && wk.WMake != nil && wk.WMake.Name == mk.Name {
+							modelContent = modelContent + `<img src=` + wk.URISmall + `> `
+
+							imgCount++
+							if imgCount >= 10 {
+								break
+							}
+						}
+					}
+
+					_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + md.Name + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a ` + md.Name + `</h1><nav><a href="index.html">back to homepage</a> | <a href="` + mk.PageURL + `.html">back to make</a></nav></header>` + modelContent + `</body></html>`)
+				}
+			}
+		}
+	}
 }
 
 //----------------- Types -------------------------------
@@ -341,6 +496,7 @@ type Make struct {
 	ID      int
 	Name    string
 	Models  []*Model
+	Works   []*Work
 	PageURL string
 }
 
@@ -348,6 +504,7 @@ type Make struct {
 type Model struct {
 	ID      int
 	MMake   *Make
+	Works   []*Work
 	Name    string
 	PageURL string
 }
@@ -357,7 +514,16 @@ type Model struct {
 func createMake(name string) *Make {
 	var m Make
 	m.Name = name
+	// m.PageURL = strings.Replace(name, " ", "", -1)
 
+	// create the HTML filename for this make by stripping make name of all non-alphanumerics
+	reg, err := regexp.Compile("[^A-Za-z0-9]+")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating make HTML filename: %v\n", err)
+		os.Exit(1)
+	}
+
+	m.PageURL = reg.ReplaceAllString(name, "-")
 	return &m
 }
 
@@ -365,6 +531,15 @@ func createModel(name string, make *Make) *Model {
 	var m Model
 	m.Name = name
 	m.MMake = make
+
+	// create the HTML filename for this model by stripping model name of all non-alphanumerics
+	reg, err := regexp.Compile("[^A-Za-z0-9]+")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating model HTML filename: %v\n", err)
+		os.Exit(1)
+	}
+
+	m.PageURL = reg.ReplaceAllString(name, "-")
 
 	return &m
 }
