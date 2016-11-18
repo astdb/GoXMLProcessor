@@ -11,11 +11,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"html"
 )
 
 func main() {
 	fmt.Println("Image processor starting...")
-	// fmt.Println(len(os.Args))
 
 	// expecting two command-line arguments at invocation - API location for reading image data from and output directory for writing static site files
 	if len(os.Args) <= 2 {
@@ -23,6 +23,7 @@ func main() {
 		return
 	}
 
+	// read in command line arguments: API URL and output directory
 	imageAPILocation := os.Args[1]
 	outputFolderLocation := os.Args[2]
 	fmt.Printf("Accessing image API at %s\n", imageAPILocation)
@@ -35,18 +36,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// predefine the token literal values we're interested in for ease of comparison when processing the XML data body
-	ID := "id"
-	FILENAME := "filename"
-	WORK := "work"
-	MODEL := "model"
-	MAKE := "make"
-	URISMALL := "small"
-	URIMEDIUM := "medium"
-	URILARGE := "large"
-
 	// read XML data body
 	dec := xml.NewDecoder(apiDataResp.Body)
+
+	// predefine the token literal values we're interested in for ease of comparison when processing the XML data body (e.g. <id>, <filename>, <work> etc)
+	ID 			:= "id"
+	FILENAME 	:= "filename"
+	WORK 		:= "work"
+	MODEL 		:= "model"
+	MAKE 		:= "make"
+	URISMALL 	:= "small"
+	URIMEDIUM 	:= "medium"
+	URILARGE 	:= "large"	
 
 	var stack []string  // we'll use a string slice as a stack datastructure to pop on/off start/end elements as we read through the XML data body's tokens
 	var works []*Work   // collection of all works detected
@@ -84,7 +85,6 @@ func main() {
 		case xml.StartElement:
 			// XML start element: push on stack and initialize new work object
 			stack = append(stack, token.Name.Local)
-			// fmt.Print(" (pushing " + token.Name.Local + ")")
 
 			if len(stack) > 0 && stack[len(stack)-1] == WORK {
 				// start of a new <work> in XML data: create a new Work instance and pop in to the list of all works
@@ -94,7 +94,6 @@ func main() {
 
 			if len(stack) > 0 && stack[len(stack)-1] == "url" {
 				for _, val := range token.Attr {
-					// fmt.Printf("Name: %v , Value: %s \n", key, val)
 					if val.Value == URISMALL {
 						thumbnailURI = true
 					}
@@ -113,7 +112,6 @@ func main() {
 			// XML end element: pop off stack
 			elementPopped := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
-			// fmt.Println(" (popping " + token.Name.Local + ")")
 
 			if elementPopped == WORK {
 				// end of a <work> element (</work>)
@@ -309,14 +307,11 @@ func main() {
 
 	defer f.Close()
 
-	// title pf index.html
-	indexTitle := "Welcome to Photos!"
-
 	// dropdown navigation to all camera makes
 	indexNavigation := `<select onchange="if (this.value) window.location.href=this.value"><option value="">-- select a camera make</option>`
 	for _, mk := range makes {
 		if mk != nil {
-			indexNavigation = indexNavigation + `<option value="` + mk.PageURL + `.html">` + mk.Name + `</option>`
+			indexNavigation = indexNavigation + `<option value="` + html.EscapeString(mk.PageURL) + `.html">` + html.EscapeString(mk.Name) + `</option>`
 		}
 	}
 
@@ -332,7 +327,7 @@ func main() {
 	imgCount := 0
 
 	for _, wk := range works {
-		indexContent = indexContent + `<img src=` + wk.URISmall + `> `
+		indexContent = indexContent + `<img src=` + html.EscapeString(wk.URISmall) + `> `
 
 		imgCount++
 		if imgCount >= 10 {
@@ -340,7 +335,7 @@ func main() {
 		}
 	}
 
-	_, err = f.WriteString(`<!DOCTYPE html><html><head><title>Works Index</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>` + indexTitle + `</h1><nav>` + indexNavigation + `</nav></header>` + indexContent + `</body></html>`)
+	_, err = f.WriteString(`<!DOCTYPE html><html><head><title>Welcome to Phoots!</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>Welcome to Photos!</h1><nav>` + indexNavigation + `</nav></header>` + indexContent + `</body></html>`)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing output to disk file: %v\n", err)
@@ -367,7 +362,7 @@ func main() {
 			modelNavigation := `<select onchange="if (this.value) window.location.href=this.value"><option value="">-- select a camera model</option>`
 			for _, md := range mk.Models {
 				if md != nil {
-					modelNavigation = modelNavigation + `<option value="` + md.PageURL + `.html">` + md.Name + `</option>`
+					modelNavigation = modelNavigation + `<option value="` + html.EscapeString(md.PageURL) + `.html">` + html.EscapeString(md.Name) + `</option>`
 				}
 			}
 
@@ -380,7 +375,7 @@ func main() {
 
 			for _, wk := range mk.Works {
 				if wk != nil && wk.WMake != nil && wk.WMake.Name == mk.Name {
-					makeContent = makeContent + `<img src=` + wk.URISmall + `> `
+					makeContent = makeContent + `<img src=` + html.EscapeString(wk.URISmall) + `> `
 
 					imgCount++
 					if imgCount >= 10 {
@@ -389,7 +384,7 @@ func main() {
 				}
 			}
 
-			_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + mk.Name + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a ` + mk.Name + `</h1><nav><a href="index.html">back to homepage</a> | ` + modelNavigation + `</nav></header>` + makeContent + `</body></html>`)
+			_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + html.EscapeString(mk.Name) + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a <i>` + mk.Name + `</i> camera</h1><nav><a href="index.html">back to homepage</a> | ` + modelNavigation + `</nav></header>` + makeContent + `</body></html>`)
 
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing output to make HTML file: %v\n", err)
@@ -420,7 +415,7 @@ func main() {
 				// imgCount := 0
 
 				if wk != nil {
-					genericContent = genericContent + `<img src=` + wk.URISmall + `> `
+					genericContent = genericContent + `<img src=` + html.EscapeString(wk.URISmall) + `> `
 
 					// imgCount++
 					// if imgCount >= 10 {
@@ -462,7 +457,7 @@ func main() {
 
 					for _, wk := range md.Works {
 						if wk != nil && wk.WMake != nil && wk.WMake.Name == mk.Name {
-							modelContent = modelContent + `<img src=` + wk.URISmall + `> `
+							modelContent = modelContent + `<img src=` + html.EscapeString(wk.URISmall) + `> `
 
 							imgCount++
 							if imgCount >= 10 {
@@ -471,7 +466,7 @@ func main() {
 						}
 					}
 
-					_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + md.Name + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a ` + md.Name + `</h1><nav><a href="index.html">back to homepage</a> | <a href="` + mk.PageURL + `.html">back to make</a></nav></header>` + modelContent + `</body></html>`)
+					_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + html.EscapeString(md.Name) + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a <i>` + html.EscapeString(md.Name) + `</i> camera</h1><nav><a href="index.html">back to homepage</a> | <a href="` + html.EscapeString(mk.PageURL) + `.html">back to make</a></nav></header>` + modelContent + `</body></html>`)
 				}
 			}
 		}
@@ -514,7 +509,6 @@ type Model struct {
 func createMake(name string) *Make {
 	var m Make
 	m.Name = name
-	// m.PageURL = strings.Replace(name, " ", "", -1)
 
 	// create the HTML filename for this make by stripping make name of all non-alphanumerics
 	reg, err := regexp.Compile("[^A-Za-z0-9]+")
@@ -560,7 +554,7 @@ func (m *Make) GetName() string {
 	return m.Name
 }
 
-//----------------- Utilities -------------------------------
+//----------------- Utility functions to print out works and makes for debug purposes -------------------------------
 
 func printMake(m *Make) {
 	if m == nil {
@@ -568,7 +562,6 @@ func printMake(m *Make) {
 		return
 	}
 
-	// fmt.Printf("%s [%v]\n", m.Name, m.Models)
 	fmt.Println(m.Name + "(" + strconv.Itoa(len(m.Models)) + ")")
 	for _, model := range m.Models {
 		fmt.Println("\t" + model.Name)
