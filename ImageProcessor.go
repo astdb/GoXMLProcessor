@@ -50,7 +50,7 @@ func main() {
 	URIMEDIUM := "medium"
 	URILARGE := "large"
 
-	// in-memory collections of works and makes, and a stack to read in XML tag tokens
+	// drclare in-memory collections for works and makes, and a stack to read in XML tag tokens
 	var stack []string  // we'll use a string slice as a stack data structure to pop on/off start/end elements as we read through the XML data body's tokens
 	var works []*Work   // collection of all works detected
 	var makes []*Make   // collection of all makes detected
@@ -316,9 +316,9 @@ func main() {
 	}
 
 	if fileInPlace {
-		fmt.Println("Output folder for static site files (./" + outputFolderLocation + ") in place.")
+		fmt.Println("Output directory for static site files (./" + outputFolderLocation + ") exists - files within with similar names will be overwritten.")
 	} else {
-		fmt.Println("Output folder for static site files (./" + outputFolderLocation + ") not in place - creating...")
+		fmt.Println("Output directory for static site files (./" + outputFolderLocation + ") doesn't exist - creating..")
 		os.MkdirAll("./"+outputFolderLocation, 0755)
 	}
 
@@ -341,6 +341,7 @@ func main() {
 		}
 	}
 
+	// if any works with no makes are recorded, add a generic option in navigation to access the page for those
 	if len(worksSM) > 0 {
 		indexNavigation = indexNavigation + `<option value="nomake.html">(no make/generic)</option></select>`
 	} else {
@@ -348,10 +349,10 @@ func main() {
 	}
 
 	// create thumbnails of first 10 works
-	indexContent := ""
+	indexContent := "" // holding variable for image HTML
+	imgCount := 0      // counter to ensure first 10 image works are shown at most on index page
 
-	imgCount := 0
-
+	// create and append HTML to display each work (up to first ten)
 	for _, wk := range works {
 		indexContent = indexContent + `<img src=` + html.EscapeString(wk.URISmall) + `> `
 
@@ -361,6 +362,7 @@ func main() {
 		}
 	}
 
+	// write the HTML structure of the index page containing navigation and image HTML to outout page
 	_, err = f.WriteString(`<!DOCTYPE html><html><head><title>Welcome to Phoots!</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>Welcome to Photos!</h1><nav>` + indexNavigation + `</nav></header>` + indexContent + `</body></html>`)
 
 	if err != nil {
@@ -372,8 +374,10 @@ func main() {
 
 	// ------------- Generate individual pages for each of the camera makes ------------------
 
+	// for each make recorded
 	for _, mk := range makes {
 		if mk != nil {
+			// create HTML file
 			outFileName := "./" + outputFolderLocation + "/" + mk.PageURL + ".html"
 			f, err := os.Create(outFileName)
 
@@ -394,10 +398,9 @@ func main() {
 
 			modelNavigation = modelNavigation + `</select>`
 
-			// create thumbnails of first 10 works by this make
+			// create thumbnail HTML for first 10 works by this make
 			makeContent := ""
 			imgCount := 0
-			// }
 
 			for _, wk := range mk.Works {
 				if wk != nil && wk.WMake != nil && wk.WMake.Name == mk.Name {
@@ -410,6 +413,7 @@ func main() {
 				}
 			}
 
+			// write the make HTML page's output to file
 			_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + html.EscapeString(mk.Name) + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a <i>` + mk.Name + `</i> camera</h1><nav><a href="index.html">back to homepage</a> | ` + modelNavigation + `</nav></header>` + makeContent + `</body></html>`)
 
 			if err != nil {
@@ -422,6 +426,7 @@ func main() {
 	}
 
 	// ------------- Generate separate page for works without a make ------------------
+	// for each work recorded without a camera make
 	if len(worksSM) > 0 {
 		for _, wk := range worksSM {
 			if wk != nil {
@@ -435,20 +440,14 @@ func main() {
 
 				defer f.Close()
 
-				// create thumbnails of first 10 works by this make
+				// create image thumbnails
 				genericContent := ""
-
-				// imgCount := 0
 
 				if wk != nil {
 					genericContent = genericContent + `<img src=` + html.EscapeString(wk.URISmall) + `> `
-
-					// imgCount++
-					// if imgCount >= 10 {
-					// 	break
-					// }
 				}
 
+				// write to output file
 				_, err = f.WriteString(`<!DOCTYPE html><html><head><title>Generic Photographic Works</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>Generic Photos</h1><nav><a href="index.html">back to homepage</a> </nav></header>` + genericContent + `</body></html>`)
 
 				if err != nil {
@@ -462,10 +461,13 @@ func main() {
 	}
 
 	// ------------- Generate individual pages for each of the camera models ------------------
+	// for each make
 	for _, mk := range makes {
 		if mk != nil {
+			// for each model of this make
 			for _, md := range mk.Models {
 				if md != nil {
+					// create HTML file
 					outFileName := "./" + outputFolderLocation + "/" + md.PageURL + ".html"
 					f, err := os.Create(outFileName)
 
@@ -476,9 +478,8 @@ func main() {
 
 					defer f.Close()
 
-					// create thumbnails of first 10 works by this make
+					// create thumbnail HTML of first 10 works by this model
 					modelContent := ""
-
 					imgCount := 0
 
 					for _, wk := range md.Works {
@@ -492,6 +493,7 @@ func main() {
 						}
 					}
 
+					// write HTML content to output file
 					_, err = f.WriteString(`<!DOCTYPE html><html><head><title>All photos taken with a ` + html.EscapeString(md.Name) + `</title><style type="text/css">nav { margin: 10px;	}</style></head><body><header><h1>All photos taken with a <i>` + html.EscapeString(md.Name) + `</i> camera</h1><nav><a href="index.html">back to homepage</a> | <a href="` + html.EscapeString(mk.PageURL) + `.html">back to make</a></nav></header>` + modelContent + `</body></html>`)
 				}
 			}
@@ -501,7 +503,7 @@ func main() {
 	fmt.Println("Static site generation complete.")
 }
 
-//----------------- Types -------------------------------
+//----------------- custom data types -------------------------------
 
 // type struct representing a photographic work
 type Work struct {
@@ -532,8 +534,9 @@ type Model struct {
 	PageURL string
 }
 
-//----------------- Type generator functions to create and return refrerences to Works/Makes/Models -------------------------------
+//---------generator functions to create and return references to Works/Makes/Models ----------
 
+// create and return a pointer to a make with a given string name
 func createMake(name string) *Make {
 	var m Make
 	m.Name = name
@@ -549,6 +552,7 @@ func createMake(name string) *Make {
 	return &m
 }
 
+// create and return a pointer to a model with a given string name and make
 func createModel(name string, make *Make) *Model {
 	var m Model
 	m.Name = name
@@ -562,10 +566,10 @@ func createModel(name string, make *Make) *Model {
 	}
 
 	m.PageURL = reg.ReplaceAllString(name, "-")
-
 	return &m
 }
 
+// create and return a pointer to a work
 func createWork() *Work {
 	var w Work
 	w.ID = -1
@@ -576,14 +580,9 @@ func createWork() *Work {
 	return &w
 }
 
-//----------------- Type Methods -------------------------------
+//----------------- Utility functions -------------------------------
 
-func (m *Make) GetName() string {
-	return m.Name
-}
-
-//----------------- Utility functions to print out works and makes for debug purposes -------------------------------
-
+// print a human-readable string description of a given Model struct instance (for debugging purposes)
 func printMake(m *Make) {
 	if m == nil {
 		fmt.Println("<Invalid Make object>")
@@ -598,6 +597,7 @@ func printMake(m *Make) {
 	return
 }
 
+// print a human-readable string description of a given Work struct instance (for debugging purposes)
 func printWork(w *Work) {
 	if w == nil {
 		fmt.Println("<Invalid work object>")
@@ -625,7 +625,7 @@ func printWork(w *Work) {
 	return
 }
 
-// exists returns whether the given file or directory exists or not
+// returns a boolean flag indicating whether the given file or directory exists or not, along with an error that may have occured while checking
 func fileExists(path string) (bool, error) {
 	_, err := os.Stat(path)
 
@@ -638,20 +638,6 @@ func fileExists(path string) (bool, error) {
 	}
 
 	return true, err
-}
-
-// containsAll reports whether x contains the elements of y, in order.
-func containsAll(x, y []string) bool {
-	for len(y) <= len(x) {
-		if len(y) == 0 {
-			return true
-		}
-		if x[0] == y[0] {
-			y = y[1:]
-		}
-		x = x[1:]
-	}
-	return false
 }
 
 //!-
