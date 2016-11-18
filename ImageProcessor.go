@@ -2,16 +2,17 @@
 
 package main
 
+// the import statement makes sure all the required packages to run this program are included
 import (
 	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"html"
 )
 
 func main() {
@@ -27,44 +28,46 @@ func main() {
 	imageAPILocation := os.Args[1]
 	outputFolderLocation := os.Args[2]
 	fmt.Printf("Accessing image API at %s\n", imageAPILocation)
-	fmt.Printf("Output files will be written to <./%s>\n", outputFolderLocation)
+	fmt.Printf("Output files for static site will be written to <./%s>\n", outputFolderLocation)
 
-	// get XML data from API location
+	// get XML data response from API location
 	apiDataResp, err := http.Get(imageAPILocation)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "API fetch error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error fetching XML works data from specified API URL (%s): %v\n", imageAPILocation, err)
 		os.Exit(1)
 	}
 
-	// read XML data body
+	// decode read XML data body
 	dec := xml.NewDecoder(apiDataResp.Body)
 
 	// predefine the token literal values we're interested in for ease of comparison when processing the XML data body (e.g. <id>, <filename>, <work> etc)
-	ID 			:= "id"
-	FILENAME 	:= "filename"
-	WORK 		:= "work"
-	MODEL 		:= "model"
-	MAKE 		:= "make"
-	URISMALL 	:= "small"
-	URIMEDIUM 	:= "medium"
-	URILARGE 	:= "large"	
+	ID := "id"
+	FILENAME := "filename"
+	WORK := "work"
+	MODEL := "model"
+	MAKE := "make"
+	URISMALL := "small"
+	URIMEDIUM := "medium"
+	URILARGE := "large"
 
-	var stack []string  // we'll use a string slice as a stack datastructure to pop on/off start/end elements as we read through the XML data body's tokens
+	// in-memory collections of works and makes, and a stack to read in XML tag tokens
+	var stack []string  // we'll use a string slice as a stack data structure to pop on/off start/end elements as we read through the XML data body's tokens
 	var works []*Work   // collection of all works detected
 	var makes []*Make   // collection of all makes detected
 	var worksSM []*Work // Works sans makes - if a work is found without a make speceifed, it'll go on this list and have a separate page generated for it to be diplayed
 
-	var newWork *Work         // placeholder for the work cirrently being iterated through
-	newModelDetected := false // flag indicating if a new model was detected in this work (if so to be added to the make of this work)
-	// var newModel string
-	newModel := "" // name of new model detected (if indicated by newModelDetected flag above)
+	var newWork *Work         // placeholder for the work currently being iterated through
+	newModelDetected := false // flag indicating if a new model was detected in the work being currently read (if so to be added to the make of this work)
+	newModel := ""            // name of new model detected (if indicated by newModelDetected flag above)
 
-	// URI data type flags
+	// URI data type flags - these will be set when the XML data is read, so the contained data canbe assigned to the correct attribute ofthe in-memory works object we're building
 	thumbnailURI := false
 	mediumURI := false
 	largeURI := false
 
-	// iterate through the full XML data body per detected token, until EOF
+	// iterate through the full decoded XML data body per detected token, until EOF
+	// we'll detect three types of main tokens: start tags, end tags and data - tags will be popped on to the stack when they open and popped off when closing.
+	// depending on the current opened token, we'll read in the data to the current in-memory work object (if we're interested in that data)
 	for {
 		// get next XML token
 		token, err := dec.Token()
@@ -78,9 +81,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		// fmt.Print(stack)
-
-		// switch statement to take selective action based on the current token
+		// switch statement to take selective action based on the current token (start, end or data)
 		switch token := token.(type) {
 		case xml.StartElement:
 			// XML start element: push on stack and initialize new work object
@@ -92,6 +93,7 @@ func main() {
 				works = append(works, newWork)
 			}
 
+			// if we're reading the URL tag of a work, set the appropriate flag depending on the the small, medium or large XML tag attribute
 			if len(stack) > 0 && stack[len(stack)-1] == "url" {
 				for _, val := range token.Attr {
 					if val.Value == URISMALL {
@@ -109,9 +111,22 @@ func main() {
 			}
 
 		case xml.EndElement:
-			// XML end element: pop off stack
+			// XML end element: pop off stack, and finalize current in-memory work object
+
+			// check if there are already XML opening tags stored in stack - if not, we've encountered a closing tag without an opening tag
+			if len(stack) <= 0 {
+				fmt.Fprintf(os.Stderr, "Attempting to pop an element(%s) without any on stack - possibly malformed XML\n", token.Name.Local)
+				os.Exit(1)
+			}
+
 			elementPopped := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
+
+			// check for XML consistency - if every end element should have had a corresponding start element
+			if elementPopped != token.Name.Local {
+				fmt.Fprintf(os.Stderr, "Closing element %s without matching opener (%s) - possibly malformed XML\n", elementPopped, token.Name.Local)
+				os.Exit(1)
+			}
 
 			if elementPopped == WORK {
 				// end of a <work> element (</work>)
@@ -126,36 +141,49 @@ func main() {
 					worksSM = append(worksSM, thisWork)
 				}
 
+				// add this work to the works lists of its make and model - makes things easier when generating make and model pages
 				if thisMake != nil && thisModel != nil {
 					thisMake.Works = append(thisMake.Works, thisWork)
 					thisModel.Works = append(thisModel.Works, thisWork)
 				}
 
+				// reset running reference to the completed work, as well as other running placeholders - ready for a new work to start
 				newWork = nil
 				newModelDetected = false
 				newModel = ""
 				thisWork, thisMake, thisModel = nil, nil, nil
 			}
+
 		case xml.CharData:
 			// XML data - populate the current work object based on XML data token (e.g. ID, model, make etc.)
 
 			//Work ID
 			if len(stack) > 0 && stack[len(stack)-1] == ID {
-				if len(works) > 0 {
-					works[len(works)-1].ID, err = strconv.Atoi(strings.TrimSpace(string(token)))
+				IDData, err := strconv.Atoi(strings.TrimSpace(string(token)))
 
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error converting Work ID: %v\n", err)
-						os.Exit(1)
-					}
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error converting Work ID: %v\n", err)
+					os.Exit(1)
+				}
+
+				if newWork != nil {
+					newWork.ID = IDData
+
+				} else {
+					fmt.Fprintf(os.Stderr, "ID data(%d) detected without an active current Work struct instance. Possibly malformed XML.", IDData)
+					os.Exit(1)
 				}
 			}
 
 			// Work filename
 			if len(stack) > 0 && stack[len(stack)-1] == FILENAME {
-				// fmt.Printf("%s\n", token)
-				if len(works) > 0 {
-					works[len(works)-1].FileName = strings.TrimSpace(string(token))
+				FileName := strings.TrimSpace(string(token))
+
+				if newWork != nil {
+					newWork.FileName = FileName
+				} else {
+					fmt.Fprintf(os.Stderr, "Filename(%s) detected without an active current Work struct instance. Possibly malformed XML.", FileName)
+					os.Exit(1)
 				}
 			}
 
@@ -164,40 +192,37 @@ func main() {
 				// make detected: retrieve make if already recorded, create if new
 				thisToken := strings.TrimSpace(string(token))
 
-				// if newWork != nil {
 				var thisMake *Make
 
-				if thisToken == "" {
-					thisToken = "(Generic make)"
-				}
+				if newWork != nil {
 
-				// check if this make is recorded in the global makes list
-				makeFound := false
-				for _, make := range makes {
-					if make != nil && make.Name == thisToken {
-						thisMake = make
-						makeFound = true
-						break
+					if thisToken == "" {
+						thisToken = "(Generic make)"
 					}
-				}
 
-				if makeFound {
-					// known make, populate work's make attribute with the make from the global list
-					works[len(works)-1].WMake = thisMake
+					// check if this make is recorded in the global makes list
+					makeFound := false
+					for _, make := range makes {
+						if make != nil && make.Name == thisToken {
+							thisMake = make
+							makeFound = true
+							break
+						}
+					}
+
+					if makeFound {
+						// known make, populate work's make attribute with the make from the global list
+						works[len(works)-1].WMake = thisMake
+					} else {
+						// new make: create and add to global makes list, and populate this work's make attribute with it
+						thisMake = createMake(thisToken)
+						makes = append(makes, thisMake)
+						works[len(works)-1].WMake = thisMake
+					}
 				} else {
-					// new make: create and add to global makes list, and populate this work's make attribute with it
-					thisMake = createMake(thisToken)
-					makes = append(makes, thisMake)
-					works[len(works)-1].WMake = thisMake
+					fmt.Fprintf(os.Stderr, "Make (%s) detected with no active Work element - possibly malformed XML input", thisToken)
+					os.Exit(1)
 				}
-				// } else {
-				// fmt.Fprintf(os.Stderr, "Make detected with no active Work element - possibly malformed XML input")
-				// os.Exit(1)
-				// }
-
-				// if len(works) > 0 {
-				// 	works[len(works)-1].WMake = strings.TrimSpace(string(token))
-				// }
 
 				// camera model detected for this work?
 				if newModelDetected == true {
@@ -233,14 +258,12 @@ func main() {
 						thisModel = createModel(newModel, thisMake)
 
 						if thisWork.WMake != nil {
-							// thisWork.WMake.Models = append(newWork.WMake.Models, thisModel)
 							thisWork.WMake.Models = append(thisWork.WMake.Models, thisModel)
 							thisWork.WModel = thisModel
 						}
 
 						thisModel = nil
 						newModel = ""
-						// works[len(works)-1].WMake = thisMake
 					}
 
 					newModelDetected = false
@@ -280,6 +303,9 @@ func main() {
 			}
 		}
 	}
+
+	fmt.Println("XML data parsing complete - generating static site...")
+
 	// ------- Generate index.html -------------------
 	// check if the specified output directory exists - if not, create it
 	fileInPlace, e := fileExists("./" + outputFolderLocation)
@@ -290,9 +316,9 @@ func main() {
 	}
 
 	if fileInPlace {
-		fmt.Println("./" + outputFolderLocation + " in place.")
+		fmt.Println("Output folder for static site files (./" + outputFolderLocation + ") in place.")
 	} else {
-		fmt.Println("./" + outputFolderLocation + " not in place - creating...")
+		fmt.Println("Output folder for static site files (./" + outputFolderLocation + ") not in place - creating...")
 		os.MkdirAll("./"+outputFolderLocation, 0755)
 	}
 
@@ -471,6 +497,8 @@ func main() {
 			}
 		}
 	}
+
+	fmt.Println("Static site generation complete.")
 }
 
 //----------------- Types -------------------------------
@@ -504,7 +532,7 @@ type Model struct {
 	PageURL string
 }
 
-//----------------- Type Generator -------------------------------
+//----------------- Type generator functions to create and return refrerences to Works/Makes/Models -------------------------------
 
 func createMake(name string) *Make {
 	var m Make
@@ -590,7 +618,6 @@ func printWork(w *Work) {
 		wModelName = w.WModel.Name
 	}
 
-	/// fmt.Println("[" + strconv.Itoa(w.ID) + "| " + w.WModel + "]")
 	fmt.Println("[" + strconv.Itoa(w.ID) + "| " + wMakeName + "| " + wModelName + "]")
 	fmt.Println("\t Thumbnail: " + w.URISmall)
 	fmt.Println("\t Medium: " + w.URIMedium)
